@@ -1,5 +1,5 @@
 {
-  "version": "3.0.0",
+  "version": "3.0.1",
   "repository": "deephaven/deephaven-mcp",
   "tasks": {
     "dev": "deno run --allow-env --allow-net --allow-read --allow-write src/main.ts",
