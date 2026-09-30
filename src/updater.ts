@@ -1,5 +1,4 @@
 import { encodeHex } from "@std/encoding/hex";
-import { basename } from "@std/path";
 import { greaterThan, parse } from "@std/semver";
 import { REPOSITORY, VERSION } from "./version.ts";
 
@@ -11,6 +10,7 @@ const DEFAULT_UPDATE_URL = `${
 }/latest/download/manifest.json`;
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const DEFAULT_INTERVAL_HOURS = 24;
+const MAX_REDIRECTS = 5;
 
 export interface Manifest {
   version: string;
@@ -24,36 +24,57 @@ function assertTrusted(url: URL): void {
   throw new Error(`Refusing to update over insecure URL: ${url}`);
 }
 
+/** Fetches `url`, following redirects by hand so every hop must be trusted. */
 async function fetchOk(url: URL, timeoutMs: number): Promise<Response> {
-  assertTrusted(url);
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
-  try {
-    // fetch follows redirects, so the final URL needs checking too.
-    assertTrusted(new URL(res.url));
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-  } catch (e) {
-    await res.body?.cancel();
-    throw e;
+  const signal = AbortSignal.timeout(timeoutMs);
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    assertTrusted(url);
+    const res = await fetch(url, { signal, redirect: "manual" });
+    const location = res.headers.get("location");
+    if (res.status >= 300 && res.status < 400 && location) {
+      await res.body?.cancel();
+      url = new URL(location, url);
+      continue;
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`HTTP ${res.status} fetching ${url}`);
+    }
+    return res;
   }
-  return res;
+  throw new Error(`Too many redirects fetching ${url}`);
 }
 
 async function replaceExecutable(binary: Uint8Array): Promise<void> {
   const exe = Deno.execPath();
-  const staged = `${exe}.new`;
+  // Per-process name, so concurrent updates never rename each other's half-written file.
+  const staged = `${exe}.${Deno.pid}.new`;
   await Deno.writeFile(staged, binary, { mode: 0o755 });
-  if (Deno.build.os === "windows") {
+  try {
+    if (Deno.build.os !== "windows") {
+      await Deno.chmod(staged, 0o755);
+      await Deno.rename(staged, exe);
+      return;
+    }
     // A running .exe can't be overwritten, but it can be renamed.
-    await Deno.remove(`${exe}.old`).catch(() => {});
-    await Deno.rename(exe, `${exe}.old`);
-  } else {
-    await Deno.chmod(staged, 0o755);
+    const old = `${exe}.old`;
+    await Deno.remove(old).catch(() => {});
+    await Deno.rename(exe, old);
+    try {
+      await Deno.rename(staged, exe);
+    } catch (e) {
+      await Deno.rename(old, exe);
+      throw e;
+    }
+  } catch (e) {
+    await Deno.remove(staged).catch(() => {});
+    throw e;
   }
-  await Deno.rename(staged, exe);
 }
 
 function intervalMs(): number {
-  const hours = Number(Deno.env.get("DH_UPDATE_INTERVAL") ?? NaN);
+  const raw = Deno.env.get("DH_UPDATE_INTERVAL");
+  const hours = raw ? Number(raw) : NaN;
   const valid = Number.isFinite(hours) && hours >= 0;
   return (valid ? hours : DEFAULT_INTERVAL_HOURS) * 3_600_000;
 }
@@ -70,8 +91,8 @@ async function claimCheck(): Promise<boolean> {
 }
 
 export async function autoUpdate(): Promise<void> {
-  // Running from source via `deno run`; never replace the deno executable.
-  if (/^deno(\.exe)?$/i.test(basename(Deno.execPath()))) return;
+  // Only compiled `dh` binaries update; from source, execPath is the deno runtime.
+  if (!Deno.build.standalone) return;
   if (Deno.build.os === "windows") {
     // Left by the previous update; deletable once that process has exited.
     await Deno.remove(`${Deno.execPath()}.old`).catch(() => {});
