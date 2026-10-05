@@ -1,10 +1,12 @@
-import { assert, assertStringIncludes } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { serveDir } from "@std/http/file-server";
 import { fromFileUrl, join } from "@std/path";
 import { binaryName, build } from "../scripts/build.ts";
 import { VERSION } from "../src/version.ts";
 
 const NEXT = "9.9.9";
+// Every asset of this release redirects to plain HTTP (never resolves: .invalid).
+const INSECURE_TAG = "v0.0.0-insecure";
 const WINDOWS = Deno.build.os === "windows";
 const installer = (name: string) =>
   fromFileUrl(new URL(`../${name}`, import.meta.url));
@@ -46,6 +48,9 @@ function fakeGitHub(root: string, latest: { tag: string }) {
         const to = `/releases/download/${latest.tag}/${asset[1]}`;
         return Response.redirect(new URL(to, url));
       }
+      if (path.startsWith(`/releases/download/${INSECURE_TAG}/`)) {
+        return Response.redirect(`http://example.invalid${path}`);
+      }
       return serveDir(req, { fsRoot: root, quiet: true });
     },
   );
@@ -76,12 +81,45 @@ Deno.test({
       assert(!insecure.success, "installer accepted a plaintext remote URL");
       assertStringIncludes(insecure.stderr, "insecure URL");
 
+      const redirected = await run(INSTALL.cmd, INSTALL.args, {
+        ...installEnv,
+        DH_INSTALL_REPO_URL: repo,
+        DH_INSTALL_VERSION: INSECURE_TAG,
+      });
+      assert(!redirected.success, "installer followed a redirect to HTTP");
+      assertStringIncludes(
+        redirected.stderr,
+        // curl's wording varies by version; both start with this.
+        WINDOWS ? "insecure URL" : 'Protocol "http"',
+      );
+
       const install = await run(INSTALL.cmd, INSTALL.args, {
         ...installEnv,
         DH_INSTALL_REPO_URL: repo,
       });
       assert(install.success, install.stderr);
       assertStringIncludes(install.stdout, `Installed dh v${VERSION}`);
+
+      if (!WINDOWS) {
+        // A temp HOME/ZDOTDIR keeps this away from the real shell config.
+        const home = join(tmp, "home");
+        await Deno.mkdir(home);
+        const pathEnv = {
+          ...installEnv,
+          DH_INSTALL_REPO_URL: repo,
+          DH_INSTALL_NO_MODIFY_PATH: "",
+          HOME: home,
+          ZDOTDIR: home,
+          SHELL: "/bin/zsh",
+        };
+        for (let i = 0; i < 2; i++) {
+          const again = await run(INSTALL.cmd, INSTALL.args, pathEnv);
+          assert(again.success, again.stderr);
+        }
+        const rc = await Deno.readTextFile(join(home, ".zshrc"));
+        const line = `export PATH="${bin}:$PATH"`;
+        assertEquals(rc.split(line).length - 1, 1, rc);
+      }
 
       const exe = join(bin, WINDOWS ? "dh.exe" : "dh");
       const env = {
@@ -130,6 +168,14 @@ Deno.test({
         const old = await Deno.stat(`${exe}.old`).catch(() => null);
         assert(!old, "dh.exe.old should be cleaned up on the next run");
       }
+
+      const redirect = await run(exe, [], {
+        ...now,
+        DH_UPDATE_URL:
+          `${repo}/releases/download/${INSECURE_TAG}/manifest.json`,
+      });
+      assertStringIncludes(redirect.stderr, "insecure URL");
+      assertStringIncludes(await version(), NEXT, "redirect to HTTP");
     } finally {
       await server.shutdown();
       await Deno.remove(tmp, { recursive: true });
