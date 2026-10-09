@@ -93,7 +93,8 @@
       [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
     $entries = [Environment]::ExpandEnvironmentVariables($userPath) -split ';'
     if ($entries -notcontains $dir) {
-      if ($env:DH_INSTALL_NO_MODIFY_PATH) {
+      # ';' would split into bogus entries and '%' would expand in this REG_EXPAND_SZ value.
+      if ($env:DH_INSTALL_NO_MODIFY_PATH -or $dir -match '[;%]') {
         Write-Host "Add $dir to your PATH to run dh."
       } else {
         $newPath = (@($userPath, $dir) | Where-Object { $_ }) -join ';'
