@@ -44,7 +44,7 @@
   # Absolute against PowerShell's location (not .NET's cwd), since it's persisted in PATH.
   $dir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dir)
   # x64 also runs on Windows on ARM under emulation.
-  $target = 'x86_64-pc-windows-msvc'
+  $target = 'windows-x64'
 
   $manifestUrl = if ($env:DH_INSTALL_VERSION) {
     "$repoUrl/releases/download/v$($env:DH_INSTALL_VERSION -replace '^v', '')/manifest.json"

@@ -9,17 +9,17 @@ DIR="${DH_INSTALL_DIR:-$HOME/.local/bin}"
 case "$DIR" in /*) ;; *) DIR="$PWD/$DIR" ;; esac
 
 case "$(uname -s)-$(uname -m)" in
-  Darwin-arm64) TARGET=aarch64-apple-darwin ;;
+  Darwin-arm64) TARGET=darwin-arm64 ;;
   Darwin-x86_64)
     # Under Rosetta, uname reports x86_64 on Apple silicon; install the native build.
     if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
-      TARGET=aarch64-apple-darwin
+      TARGET=darwin-arm64
     else
-      TARGET=x86_64-apple-darwin
+      TARGET=darwin-x64
     fi
     ;;
-  Linux-x86_64) TARGET=x86_64-unknown-linux-gnu ;;
-  Linux-aarch64 | Linux-arm64) TARGET=aarch64-unknown-linux-gnu ;;
+  Linux-x86_64) TARGET=linux-x64 ;;
+  Linux-aarch64 | Linux-arm64) TARGET=linux-arm64 ;;
   *)
     echo "dh: unsupported platform $(uname -sm)" >&2
     exit 1
