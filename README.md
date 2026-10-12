@@ -1,6 +1,6 @@
 # dh — Deephaven CLI
 
-A single compiled binary, built with Deno, that updates itself from GitHub
+A single compiled binary, built with Bun, that updates itself from GitHub
 releases.
 
 ```sh
